@@ -4,8 +4,8 @@ import dotenv from "dotenv";
 import connectMongoDB from "./dbConfig/db.js";
 import Parking from "./models/Parking.js";
 import ParkingEvent from "./models/ParkingEvent.js";
+import mqtt from "./mqttConfig/mqtt.js";
 
-//variables de entorno
 dotenv.config();
 
 const app = express();
@@ -15,6 +15,9 @@ const server = http.createServer(app);
 
 //conexion bd
 connectMongoDB();
+
+//inicializar MQTT
+mqtt.init();
 
 app.post("/api/parking", async (req, res) => {
     try {
