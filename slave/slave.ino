@@ -1,16 +1,53 @@
-#include <Wire.h> 
+#include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <ESP32Servo.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <PubSubClient.h>
+#include <WiFiClientSecure.h>
 
-// --- CONFIGURACIÓN DE PANTALLA ---
-// Si no enciende, prueba cambiar 0x27 por 0x3F
-LiquidCrystal_I2C lcd(0x27, 16, 2); 
+WiFiClientSecure espClient;
 
-// --- PINES ---
+PubSubClient client(espClient);
+long lastMsg = 0;
+char msg[50];
+int value = 0;
+
+// config mqtt
+// dir mqtt broker ip adreess
+const char* mqtt_server = "j72b9212.ala.us-east-1.emqxsl.com";
+const char* mqtt_user = "SistemasEmbebidos";        // Tu Username
+const char* mqtt_password = "SistemasEmbebidos"; // Tu Password
+
+// certificado broker
+const char* EMQX_CA_CERT = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)EOF";
+
+// --- INTENTA CON 0x27, SI NO FUNCIONA CAMBIA A 0x3F ---
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int PIN_BOTON = 4;
-const int PIN_IR_SALIDA = 13; 
+const int PIN_IR_SALIDA = 13;
 const int PIN_SERVO = 27;
 
 const int TRIG_1 = 32; const int ECHO_1 = 35;
@@ -19,107 +56,21 @@ const int TRIG_2 = 25; const int ECHO_2 = 26;
 Servo barrera;
 int lugaresLibres = 2;
 
-// --- WIFI ---
-const char* WIFI_SSID = "TP-Link_6D76";
-const char* WIFI_PASSWORD = "55500722";
+// Variables WiFi
+const char* ssid = "TP-Link_6D76";
+const char* password = "55500722";
 
-// --- SERVIDOR API (Node/Express) ---
-// Asegúrate de que esta IP sea fija en tu PC
-const char* API_URL = "http://192.168.0.104:8080/api/parking"; // Para estado en tiempo real
-const char* API_EVENT_URL = "http://192.168.0.104:8080/api/parking/event"; // Para cobros
-
-// --- CONTROL DE TIEMPOS POR PLAZA ---
-bool p1OcupadoPrev = false;
-bool p2OcupadoPrev = false;
-unsigned long p1InicioMs = 0;
-unsigned long p2InicioMs = 0;
-
-void conectarWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
-  
-  // Solo intentamos conectar si no estamos conectados
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  Serial.print("Conectando a WiFi");
-  unsigned long inicio = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - inicio) < 10000) { // Timeout reducido a 10s
-    Serial.print(".");
-    delay(500);
-  }
-  Serial.println();
-  if(WiFi.status() == WL_CONNECTED){
-    Serial.println("WiFi Conectado!");
-    Serial.print("IP: "); Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("Fallo al conectar WiFi");
-  }
-}
-
-// Envía estado actual (Ocupación)
-void enviarDatos(long d1, long d2, int ocupados, int libres) {
-  if (WiFi.status() != WL_CONNECTED) conectarWiFi();
-  if (WiFi.status() != WL_CONNECTED) return; // Si falla, salimos para no colgar el loop
-
-  HTTPClient http;
-  http.begin(API_URL);
-  http.addHeader("Content-Type", "application/json");
-
-  // JSON Optimizado
-  String payload = "{";
-  payload += "\"lugaresLibres\":" + String(libres) + ",";
-  payload += "\"ocupados\":" + String(ocupados) + ",";
-  payload += "\"p1\":" + String((d1 > 0 && d1 < 10) ? 1 : 0) + ",";
-  payload += "\"p2\":" + String((d2 > 0 && d2 < 10) ? 1 : 0);
-  payload += "}";
-
-  int httpResponseCode = http.POST(payload);
-  
-  if (httpResponseCode > 0) {
-    Serial.printf("Datos enviados. Código: %d\n", httpResponseCode);
-  } else {
-    Serial.printf("Error enviando datos: %s\n", http.errorToString(httpResponseCode).c_str());
-  }
-  http.end();
-}
-
-// Envía evento de FINALIZACIÓN (Cobro)
-void enviarEvento(const char* plaza, unsigned long duracionMs) {
-  if (WiFi.status() != WL_CONNECTED) conectarWiFi();
-  if (WiFi.status() != WL_CONNECTED) return;
-
-  HTTPClient http;
-  http.begin(API_EVENT_URL);
-  http.addHeader("Content-Type", "application/json");
-
-  // Convertimos a segundos para facilitar el cálculo monetario en el servidor
-  unsigned long duracionSegundos = duracionMs / 1000;
-
-  String payload = "{";
-  payload += "\"plaza\":\"" + String(plaza) + "\",";
-  payload += "\"duracion_segundos\":" + String(duracionSegundos) + ","; 
-  payload += "\"evento\":\"salida\""; // Etiqueta útil para el backend
-  payload += "}";
-
-  Serial.println("Enviando evento de cobro: " + payload);
-
-  int httpResponseCode = http.POST(payload);
-
-  if (httpResponseCode == 200) {
-    String response = http.getString();
-    Serial.println("Cobro registrado exitosamente.");
-    Serial.println("Respuesta del servidor: " + response);
-    // Aquí podrías parsear 'response' si el servidor devuelve el costo calculado
-    // Ejemplo: {"costo": 1500}
-  } else {
-    Serial.printf("Error en cobro. Código: %d\n", httpResponseCode);
-  }
-  
-  http.end();
-}
+// Variables de control de tiempo
+unsigned long tiempoInicialP1 = 0;
+unsigned long tiempoInicialP2 = 0;
+bool estadoAnteriorP1 = false;
+bool estadoAnteriorP2 = false;
 
 void setup() {
   Serial.begin(115200);
+  setup_wifi();
+  espClient.setCACert(EMQX_CA_CERT);
+  client.setServer(mqtt_server, 8883);
 
   // Inicialización de la LCD
   lcd.init();
@@ -129,8 +80,6 @@ void setup() {
   lcd.print("   PROYECTO   ");
   lcd.setCursor(0, 1);
   lcd.print("   PARKING    ");
-
-  conectarWiFi();
 
   pinMode(PIN_BOTON, INPUT_PULLUP);
   pinMode(PIN_IR_SALIDA, INPUT_PULLUP);
@@ -146,67 +95,130 @@ void setup() {
   actualizarLCD();
 }
 
+void setup_wifi(){
+  delay(10);
+  Serial.println();
+  Serial.print("conectado a");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while(WiFi.status() != WL_CONNECTED){
+    delay(500);
+    Serial.print(".");
+    }
+    Serial.println("");
+    Serial.println("WiFi conectado");
+    Serial.println("IP ADRESS:");
+    Serial.println(WiFi.localIP());
+}
+
+// realiza la reconexiòn MQTT en caso de fallo
+void reconnect (){
+  while (!client.connected()){
+    Serial.print("intentando conexiòn MQTT");
+
+    if (client.connect ("ESP32 client", mqtt_user, mqtt_password)){
+      Serial.println("conectado");
+      } else {
+        Serial.print ("fallo, rc=");
+        Serial.print (client.state());
+        Serial.println ("intente en 5s");
+        delay (5000);
+        }
+    }
+  }
+
+void publicarDatosMQTT() {
+  long now = millis();
+  if (now - lastMsg > 1000) {
+    lastMsg = now;
+
+    long d1 = medirDistancia(TRIG_1, ECHO_1);
+    delay(60);
+    long d2 = medirDistancia(TRIG_2, ECHO_2);
+
+    bool ocupadoP1 = (d1 > 0 && d1 < 10);
+    bool ocupadoP2 = (d2 > 0 && d2 < 10);
+
+    // ===== PARKING 1 =====
+    if (ocupadoP1 && !estadoAnteriorP1) {
+      tiempoInicialP1 = now;
+      Serial.println(">>> VEHICULO ENTRÓ A P1");
+
+    } else if (!ocupadoP1 && estadoAnteriorP1) {
+      unsigned long tiempoFinal = now;
+      unsigned long diferenciaTiempo = tiempoFinal - tiempoInicialP1;
+
+      Serial.println(">>> VEHICULO SALIÓ DE P1");
+      Serial.print("Tiempo: ");
+      Serial.print(diferenciaTiempo / 1000);
+      Serial.println(" seg");
+
+      char payload[250];
+      sprintf(payload, "{\"espacio\":\"P1\",\"tiempoInicial\":%lu,\"tiempoFinal\":%lu,\"diferenciaTiempo\":%lu}", 
+              tiempoInicialP1, tiempoFinal, diferenciaTiempo);
+      client.publish("embebidos/parking/evento", payload);
+
+      tiempoInicialP1 = 0;
+    }
+
+    // ===== PARKING 2 =====
+    if (ocupadoP2 && !estadoAnteriorP2) {
+      tiempoInicialP2 = now;
+      Serial.println(">>> VEHICULO ENTRÓ A P2");
+
+    } else if (!ocupadoP2 && estadoAnteriorP2) {
+      unsigned long tiempoFinal = now;
+      unsigned long diferenciaTiempo = tiempoFinal - tiempoInicialP2;
+
+      Serial.println(">>> VEHICULO SALIÓ DE P2");
+      Serial.print("Tiempo: ");
+      Serial.print(diferenciaTiempo / 1000);
+      Serial.println(" seg");
+
+      // PUBLICAR TODO EN UN SOLO MENSAJE
+      char payload[250];
+      sprintf(payload, "{\"espacio\":\"P2\",\"tiempoInicial\":%lu,\"tiempoFinal\":%lu,\"diferenciaTiempo\":%lu}", 
+              tiempoInicialP2, tiempoFinal, diferenciaTiempo);
+      client.publish("embebidos/parking/evento", payload);
+
+      tiempoInicialP2 = 0;
+    }
+
+    estadoAnteriorP1 = ocupadoP1;
+    estadoAnteriorP2 = ocupadoP2;
+  }
+}
+
 void loop() {
-  // --- LÓGICA DE SENSORES ---
+  //integracion MQTT
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+  publicarDatosMQTT();
+
+  // Lógica de Entrada
+  if (digitalRead(PIN_BOTON) == LOW && lugaresLibres > 0) {
+    abrirBarrera("  BIENVENIDO   ");
+  }
+
+  // Lógica de Salida (Sensor IR Pin 13)
+  if (digitalRead(PIN_IR_SALIDA) == HIGH) {
+    abrirBarrera("  BUEN VIAJE   ");
+  }
+
+  // Medición de ocupación
   long d1 = medirDistancia(TRIG_1, ECHO_1);
-  delay(50); // Pequeña pausa entre sonares para evitar interferencia
+  delay(60);
   long d2 = medirDistancia(TRIG_2, ECHO_2);
 
-  // Umbral de 10cm para considerar ocupado
-  bool p1Ocupado = (d1 > 0 && d1 < 10);
-  bool p2Ocupado = (d2 > 0 && d2 < 10);
-
-  // --- DETECCIÓN DE EVENTOS (Flancos) ---
-  
-  // PLAZA 1
-  if (!p1OcupadoPrev && p1Ocupado) {
-    p1InicioMs = millis(); // Auto entra
-    Serial.println("Auto entro en P1");
-  }
-  if (p1OcupadoPrev && !p1Ocupado) {
-    // Auto sale -> Calcular y cobrar
-    unsigned long duracion = millis() - p1InicioMs;
-    Serial.print("Auto salio de P1. Duracion (ms): "); Serial.println(duracion);
-    // Filtro de ruido: Si duró menos de 5 segundos, quizás fue alguien pasando caminando
-    if (duracion > 5000) { 
-        enviarEvento("P1", duracion);
-    }
-  }
-
-  // PLAZA 2
-  if (!p2OcupadoPrev && p2Ocupado) {
-    p2InicioMs = millis();
-    Serial.println("Auto entro en P2");
-  }
-  if (p2OcupadoPrev && !p2Ocupado) {
-    unsigned long duracion = millis() - p2InicioMs;
-    Serial.print("Auto salio de P2. Duracion (ms): "); Serial.println(duracion);
-    if (duracion > 5000) {
-        enviarEvento("P2", duracion);
-    }
-  }
-
-  p1OcupadoPrev = p1Ocupado;
-  p2OcupadoPrev = p2Ocupado;
-
-  // --- ACTUALIZACIÓN DE ESTADO ---
-  int ocupados = (p1Ocupado ? 1 : 0) + (p2Ocupado ? 1 : 0);
+  int ocupados = ( (d1 > 0 && d1 < 10) ? 1 : 0 ) + ( (d2 > 0 && d2 < 10) ? 1 : 0 );
   int nuevosLibres = 2 - ocupados;
 
   if (nuevosLibres != lugaresLibres) {
     lugaresLibres = nuevosLibres;
     actualizarLCD();
-    enviarDatos(d1, d2, ocupados, lugaresLibres);
   }
-
-  // --- CONTROL DE BARRERA ---
-  if (digitalRead(PIN_BOTON) == LOW && lugaresLibres > 0) {
-    abrirBarrera("  BIENVENIDO   ");
-  }
-  if (digitalRead(PIN_IR_SALIDA) == HIGH) { // Asumiendo que HIGH detecta salida
-    abrirBarrera("  BUEN VIAJE   ");
-  }
-
   delay(200);
 }
 
@@ -223,7 +235,7 @@ void abrirBarrera(String msg) {
   lcd.print(msg);
   lcd.setCursor(0, 1);
   lcd.print("ABRIENDO...     ");
-  barrera.write(90); 
+  barrera.write(90);
   delay(3000);
   barrera.write(0);
   actualizarLCD();
@@ -232,11 +244,11 @@ void abrirBarrera(String msg) {
 void actualizarLCD() {
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("LIBRES: "); lcd.print(lugaresLibres);
+  lcd.print("LIBRES: ");
+  lcd.print(lugaresLibres);
   lcd.setCursor(0, 1);
-  
-  // Medimos de nuevo rápido para actualizar UI, o usamos variables globales mejor
-  // Para simplicidad, invocamos medirDistancia pero idealmente usaríamos el estado 'p1Ocupado'
-  lcd.print("P1:"); lcd.print(medirDistancia(TRIG_1, ECHO_1) < 10 ? "[X]" : "[ ]");
-  lcd.print(" P2:"); lcd.print(medirDistancia(TRIG_2, ECHO_2) < 10 ? "[X]" : "[ ]");
+  lcd.print("P1:");
+  lcd.print(medirDistancia(TRIG_1, ECHO_1) < 10 ? "[X]" : "[ ]");
+  lcd.print(" P2:");
+  lcd.print(medirDistancia(TRIG_2, ECHO_2) < 10 ? "[X]" : "[ ]");
 }

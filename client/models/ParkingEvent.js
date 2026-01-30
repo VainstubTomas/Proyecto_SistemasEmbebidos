@@ -6,6 +6,7 @@ const parkingEventSchema = new mongoose.Schema(
     duracionMs: { type: Number, required: true },
     startedAt: { type: Date, required: true },
     endedAt: { type: Date, required: true },
+    tarifa: { type: Number, required: true }
   },
   { timestamps: true }
 );
