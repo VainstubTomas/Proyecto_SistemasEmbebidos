@@ -1,6 +1,7 @@
 import mqtt from 'mqtt';
 import fs from 'fs';
 import ParkingEvent from '../models/ParkingEvent.js';
+import { enviarNotificacionPago } from '../utils/mails.js';
 
 //Broker Configuration
 const BROKER_URL = 'j72b9212.ala.us-east-1.emqxsl.com';
@@ -84,13 +85,20 @@ client.on('message', async (topic, message) => {
                     duracionMs: datos.diferenciaTiempo,
                     startedAt: new Date(datos.tiempoInicial),
                     endedAt: new Date(datos.tiempoFinal),
-                    tarifa: tarifaTotal  // ✅ AGREGAR TARIFA
+                    tarifa: tarifaTotal
                 });
 
                 await nuevoEvento.save();
-                console.log('✅ Evento guardado en la base de datos');
+                console.log('[BD] Evento guardado en la base de datos');
             } catch (dbError) {
-                console.error('❌ Error al guardar en BD:', dbError.message);
+                console.error('[BD] Error al guardar en BD:', dbError.message);
+            }
+
+            //notificacion email
+            try {
+                await enviarNotificacionPago(tarifaTotal, datos.espacio, tiempoMinutos);
+            } catch (error) {
+                console.log("[MQTT] Error enviado mail: ", error);
             }
         }
 

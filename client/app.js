@@ -13,11 +13,21 @@ app.use(express.json());
 app.use(express.static("public"));
 const server = http.createServer(app);
 
-//conexion bd
-connectMongoDB();
+async function startServer() {
+    try {
+        //conexion bd
+        await connectMongoDB();
 
-//inicializar MQTT
-mqtt.init();
+        //inicializar MQTT
+        mqtt.init();
+
+        server.listen(8080, ()=>{
+            console.log("Servidor iniciado correctamente en el puerto 8080");
+        });
+    } catch (error) {
+        console.log("[APP] Error: ", error);
+    }
+}
 
 app.post("/api/parking", async (req, res) => {
     try {
@@ -41,6 +51,4 @@ app.post("/api/parking/event", async (req, res) => {
     }
 });
 
-server.listen(8080, ()=>{
-    console.log("Servidor iniciado correctamente en el puerto 8080");
-});
+startServer();
